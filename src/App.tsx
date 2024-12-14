@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { faker } from "@faker-js/faker";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
+import { isRateLimitError } from "@convex-dev/rate-limiter";
 
 const NAME = getOrSetFakeName();
 
@@ -29,6 +30,25 @@ export default function App() {
     };
   }, [retryInterval]);
 
+  const handleRateLimitError = (error: { data: any }) => {
+    setIsRateLimited(true);
+    const retryAfter = Math.ceil(error.data.retryAfter);
+    setRetrySeconds(retryAfter);
+
+    const interval = setInterval(() => {
+      setRetrySeconds((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          setIsRateLimited(false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    setRetryInterval(interval);
+  };
+
   const handleSendMessage = async (e: { preventDefault: () => void }) => {
     e.preventDefault();
 
@@ -45,33 +65,11 @@ export default function App() {
         clearInterval(retryInterval);
         setRetryInterval(null);
       }
-    } catch (error: any) {
-      // Parse the error message to get the JSON object
-      try {
-        const errorMatch = error.message.match(/\{.*\}/);
-        if (errorMatch) {
-          const errorObj = JSON.parse(errorMatch[0]);
-          if (errorObj.kind === "RateLimited") {
-            setIsRateLimited(true);
-            const retryAfter = Math.ceil(errorObj.retryAfter);
-            setRetrySeconds(retryAfter);
-
-            const interval = setInterval(() => {
-              setRetrySeconds((prev) => {
-                if (prev <= 1) {
-                  clearInterval(interval);
-                  setIsRateLimited(false);
-                  return 0;
-                }
-                return prev - 1;
-              });
-            }, 1000);
-
-            setRetryInterval(interval);
-          }
-        }
-      } catch (parseError) {
-        console.error("Failed to parse rate limit error", error);
+    } catch (error) {
+      if (isRateLimitError(error)) {
+        handleRateLimitError(error);
+      } else {
+        console.error("Failed to send message:", error);
       }
     }
   };
