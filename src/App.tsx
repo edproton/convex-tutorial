@@ -31,6 +31,12 @@ export default function App() {
 
   const handleSendMessage = async (e: { preventDefault: () => void }) => {
     e.preventDefault();
+
+    // If we're rate limited, don't try to send
+    if (isRateLimited) {
+      return;
+    }
+
     try {
       await sendMessage({ user: NAME, body: newMessageText });
       setNewMessageText("");
@@ -40,27 +46,43 @@ export default function App() {
         setRetryInterval(null);
       }
     } catch (error: any) {
-      if (error.message.includes("RateLimited")) {
-        const retryAfter = parseFloat(
-          error.message.match(/retryAfter":(\d+\.?\d*)/)[1]
-        );
-        setIsRateLimited(true);
-        setRetrySeconds(Math.ceil(retryAfter));
+      // Parse the error message to get the JSON object
+      try {
+        const errorMatch = error.message.match(/\{.*\}/);
+        if (errorMatch) {
+          const errorObj = JSON.parse(errorMatch[0]);
+          if (errorObj.kind === "RateLimited") {
+            setIsRateLimited(true);
+            const retryAfter = Math.ceil(errorObj.retryAfter);
+            setRetrySeconds(retryAfter);
 
-        const interval = setInterval(() => {
-          setRetrySeconds((prev) => {
-            if (prev <= 1) {
-              clearInterval(interval);
-              setIsRateLimited(false);
-              return 0;
-            }
-            return prev - 1;
-          });
-        }, 1000);
+            const interval = setInterval(() => {
+              setRetrySeconds((prev) => {
+                if (prev <= 1) {
+                  clearInterval(interval);
+                  setIsRateLimited(false);
+                  return 0;
+                }
+                return prev - 1;
+              });
+            }, 1000);
 
-        setRetryInterval(interval);
+            setRetryInterval(interval);
+          }
+        }
+      } catch (parseError) {
+        console.error("Failed to parse rate limit error", error);
       }
     }
+  };
+
+  const formatRetryTime = (seconds: number) => {
+    if (seconds < 60) {
+      return `${seconds} seconds`;
+    }
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}m ${remainingSeconds}s`;
   };
 
   return (
@@ -81,10 +103,11 @@ export default function App() {
             margin: "12px auto",
             borderRadius: "8px",
             maxWidth: "380px",
+            textAlign: "center",
           }}
         >
-          Rate limit reached. You can send another message in {retrySeconds}{" "}
-          seconds.
+          Rate limit reached. You can send another message in{" "}
+          {formatRetryTime(retrySeconds)}.
         </article>
       )}
 
@@ -102,7 +125,11 @@ export default function App() {
         <input
           value={newMessageText}
           onChange={(e) => setNewMessageText(e.target.value)}
-          placeholder="Write a message…"
+          placeholder={
+            isRateLimited
+              ? `Rate limited for ${formatRetryTime(retrySeconds)}...`
+              : "Write a message…"
+          }
           disabled={isRateLimited}
           style={isRateLimited ? { opacity: 0.7 } : {}}
         />
@@ -111,7 +138,7 @@ export default function App() {
           disabled={!newMessageText || isRateLimited}
           style={isRateLimited ? { opacity: 0.7 } : {}}
         >
-          {isRateLimited ? `Wait ${retrySeconds}s` : "Send"}
+          {isRateLimited ? `${formatRetryTime(retrySeconds)}` : "Send"}
         </button>
       </form>
     </main>
