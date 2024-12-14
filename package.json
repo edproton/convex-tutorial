@@ -9,6 +9,7 @@
     "predev": "convex dev --once"
   },
   "dependencies": {
+    "@convex-dev/rate-limiter": "^0.2.4",
     "@faker-js/faker": "^8.4.1",
     "convex": "1.17.3",
     "prettier": "3.2.5",
