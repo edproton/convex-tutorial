@@ -3,22 +3,65 @@ import { faker } from "@faker-js/faker";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 
-// For demo purposes. In a real app, you'd have real user data.
 const NAME = getOrSetFakeName();
 
 export default function App() {
   const messages = useQuery(api.chat.getMessages);
-  // TODO: Add mutation hook here.
   const sendMessage = useMutation(api.chat.sendMessage);
-
   const [newMessageText, setNewMessageText] = useState("");
+  const [isRateLimited, setIsRateLimited] = useState(false);
+  const [retrySeconds, setRetrySeconds] = useState(0);
+  const [retryInterval, setRetryInterval] = useState<NodeJS.Timeout | null>(
+    null
+  );
 
   useEffect(() => {
-    // Make sure scrollTo works on button click in Chrome
     setTimeout(() => {
       window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
     }, 0);
   }, [messages]);
+
+  useEffect(() => {
+    return () => {
+      if (retryInterval) {
+        clearInterval(retryInterval);
+      }
+    };
+  }, [retryInterval]);
+
+  const handleSendMessage = async (e: { preventDefault: () => void }) => {
+    e.preventDefault();
+    try {
+      await sendMessage({ user: NAME, body: newMessageText });
+      setNewMessageText("");
+      setIsRateLimited(false);
+      if (retryInterval) {
+        clearInterval(retryInterval);
+        setRetryInterval(null);
+      }
+    } catch (error: any) {
+      if (error.message.includes("RateLimited")) {
+        const retryAfter = parseFloat(
+          error.message.match(/retryAfter":(\d+\.?\d*)/)[1]
+        );
+        setIsRateLimited(true);
+        setRetrySeconds(Math.ceil(retryAfter));
+
+        const interval = setInterval(() => {
+          setRetrySeconds((prev) => {
+            if (prev <= 1) {
+              clearInterval(interval);
+              setIsRateLimited(false);
+              return 0;
+            }
+            return prev - 1;
+          });
+        }, 1000);
+
+        setRetryInterval(interval);
+      }
+    }
+  };
 
   return (
     <main className="chat">
@@ -28,33 +71,47 @@ export default function App() {
           Connected as <strong>{NAME}</strong>
         </p>
       </header>
+
+      {isRateLimited && (
+        <article
+          style={{
+            backgroundColor: "var(--primary)",
+            color: "white",
+            padding: "12px",
+            margin: "12px auto",
+            borderRadius: "8px",
+            maxWidth: "380px",
+          }}
+        >
+          Rate limit reached. You can send another message in {retrySeconds}{" "}
+          seconds.
+        </article>
+      )}
+
       {messages?.map((message) => (
         <article
           key={message._id}
           className={message.user === NAME ? "message-mine" : ""}
         >
           <div>{message.user}</div>
-
           <p>{message.body}</p>
         </article>
       ))}
-      <form
-        onSubmit={async (e) => {
-          e.preventDefault();
-          await sendMessage({ user: NAME, body: newMessageText });
-          setNewMessageText("");
-        }}
-      >
+
+      <form onSubmit={handleSendMessage}>
         <input
           value={newMessageText}
-          onChange={async (e) => {
-            const text = e.target.value;
-            setNewMessageText(text);
-          }}
+          onChange={(e) => setNewMessageText(e.target.value)}
           placeholder="Write a message…"
+          disabled={isRateLimited}
+          style={isRateLimited ? { opacity: 0.7 } : {}}
         />
-        <button type="submit" disabled={!newMessageText}>
-          Send
+        <button
+          type="submit"
+          disabled={!newMessageText || isRateLimited}
+          style={isRateLimited ? { opacity: 0.7 } : {}}
+        >
+          {isRateLimited ? `Wait ${retrySeconds}s` : "Send"}
         </button>
       </form>
     </main>
